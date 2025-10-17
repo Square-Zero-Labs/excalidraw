@@ -5,7 +5,13 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: "dist/ui",
-    emptyOutDir: false
+    emptyOutDir: false,
+    cssCodeSplit: false,
+    rollupOptions: {
+      output: {
+        manualChunks: undefined
+      }
+    }
   },
   base: "",
 });

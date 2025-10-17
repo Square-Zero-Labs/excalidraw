@@ -1,6 +1,6 @@
 # Excalidraw OpenAI App example
 
-This example shows how to embed Excalidraw inside a [ChatGPT App](https://developers.openai.com/docs/apps/) using the OpenAI Apps SDK. It mirrors the architecture described in the Excalidraw documentation: a thin UI bundle renders `<Excalidraw>` and streams every change back to the tool runtime. ChatGPT can then reply with structured updates that are applied straight to the canvas through the imperative API.
+This example shows how to embed Excalidraw inside a [ChatGPT app](https://developers.openai.com/docs/apps/) using the **public** Apps tooling that ships with the Model Context Protocol (MCP). The UI bundle renders `<Excalidraw>` and syncs changes to the MCP server so ChatGPT can observe and modify the canvas.
 
 ## Prerequisites
 
@@ -17,7 +17,9 @@ This example shows how to embed Excalidraw inside a [ChatGPT App](https://develo
    yarn install
    ```
 
-2. **Build the local Excalidraw package**
+   > The CLI has to download a few packages from the public npm registry (`@modelcontextprotocol/sdk`, `tsx`, etc.) so make sure you have network access when you run this step.
+
+2. **Build the local Excalidraw workspace package**
 
    ```bash
    yarn build:packages
@@ -29,20 +31,33 @@ This example shows how to embed Excalidraw inside a [ChatGPT App](https://develo
    yarn build
    ```
 
-   The Vite build step outputs the static assets into `dist/ui`, which `app.config.ts` serves to ChatGPT.
+   Vite writes the UI bundle to `dist/ui/`. The MCP server in `server.ts` reads that output and inlines it into an HTML template that ChatGPT can embed.
 
-4. **Run the app locally**
+4. **Start the MCP server**
 
    ```bash
-   yarn dev
+   yarn mcp
    ```
 
-   The command proxies through `openai apps dev --config ./app.config.ts`. When the CLI starts it prints a development URL; paste that URL into the "Tools" tab of ChatGPT to sideload the tool.
+   The server listens on `http://localhost:8000/mcp` and exposes a single tool named `excalidraw_diagrammer`.
+
+5. **Expose the server to ChatGPT**
+
+   ```bash
+   ngrok http 8000
+   ```
+
+   Copy the HTTPS forwarding URL that ngrok prints (for example `https://<random>.ngrok-free.app`). In ChatGPT developer mode create a custom connector that points to `https://<random>.ngrok-free.app/mcp`.
+
+6. **Invoke the tool from ChatGPT**
+
+   Call the `excalidraw_diagrammer` tool with an optional `scene` payload. The UI renders inside the sideloaded tool, streams your edits back through the MCP server, and the model can respond with new `scene` objects or header `hint`s.
 
 ## How it works
 
-- `app.config.ts` registers a single tool (`excalidraw_diagrammer`) with the Apps SDK. The tool exposes an optional `scene` parameter that the model can return to overwrite or extend the diagram and a `hint` string for lightweight status messages. It also listens for `diagram:update` events emitted by the UI so the model can observe edits in realtime.
-- `src/tool-ui.tsx` is the React entry point rendered in the ChatGPT tool panel. It mounts `<Excalidraw>` and bridges its change events through `createToolRuntimeClient()`. When ChatGPT responds with an `apply-scene` message, the component merges that payload into the current scene via `excalidrawAPI.updateScene`.
+- `server.ts` is a minimal MCP server backed by `@modelcontextprotocol/sdk`. It exposes a single tool (`excalidraw_diagrammer`) plus an HTML resource (`ui://excalidraw/diagram.html`) that ChatGPT renders when the tool replies with structured content. The server stores the latest scene so subsequent tool invocations see the most recent canvas.
+- `src/openai-bridge.ts` reproduces the `useOpenAiGlobal()` helper from the OpenAI Apps examples so the React bundle can access `window.openai` updates.
+- `src/tool-ui.tsx` is the React entry point rendered in the ChatGPT tool panel. It mounts `<Excalidraw>`, listens for `window.openai.toolOutput` updates, and merges any returned `scene` into the live canvas. User edits are throttled, serialized with `serializeAsJSON()`, cached via `window.openai.setWidgetState()`, and mirrored back to the MCP server with `callTool("excalidraw_diagrammer", { action: "update", ... })`.
 - `src/main.tsx` boots the UI bundle in standalone dev mode (outside ChatGPT) so you can verify the canvas renders correctly.
 
 ## Prompting tips
@@ -78,6 +93,6 @@ The UI will merge the returned elements into the current scene and surface the `
 
 ## Next steps
 
-- Stream rendered thumbnails or SVG snapshots back to ChatGPT by attaching another event to `runtime.emitEvent`.
-- Expand the parameter schema to support granular commands (e.g. `addConnector`, `deleteElement`).
-- Persist the serialized `.excalidraw` payloads you receive from `diagram:update` events to build audit trails or project history.
+- Extend the MCP server to emit additional structured data (SVG, PNG) alongside the scene so the assistant can reference visual snapshots in text responses.
+- Add more granular parameters (for example `operations: [{type: "addElement", ...}]`) so the model can make incremental edits instead of replacing the whole scene.
+- Persist the serialized `.excalidraw` payloads captured in `window.openai.setWidgetState()` to share or replay diagram history.

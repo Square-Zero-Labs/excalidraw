@@ -10,6 +10,6 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["vite/client"]
   },
-  "include": ["src", "app.config.ts"],
+  "include": ["src", "server.ts"],
   "exclude": ["dist", "node_modules"]
 }

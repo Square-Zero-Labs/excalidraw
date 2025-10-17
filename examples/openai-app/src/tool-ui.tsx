@@ -5,109 +5,158 @@ import {
 } from "@excalidraw/excalidraw";
 import type { BinaryFiles, ExcalidrawElement } from "@excalidraw/excalidraw/types";
 import merge from "lodash.merge";
-import { createToolRuntimeClient } from "@openai/app-sdk";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import "./tool-ui.css";
+import { getOpenAi, useOpenAiGlobal } from "./openai-bridge";
 
-const DEFAULT_CANVAS_WIDTH = 1200;
 const DEFAULT_CANVAS_HEIGHT = 720;
 
-export type DiagramMessage =
-  | {
-      type: "apply-scene";
-      scene: {
-        elements?: readonly ExcalidrawElement[];
-        appState?: any;
-        files?: BinaryFiles;
-      };
-    }
-  | {
-      type: "set-active-tool";
-      tool: string;
-    }
-  | {
-      type: "hint";
-      hint: string;
-    };
+export default function DiagramTool() {
+  const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
+  const toolOutput = useOpenAiGlobal("toolOutput") as
+    | {
+        scene?: {
+          elements?: readonly ExcalidrawElement[];
+          appState?: any;
+          files?: BinaryFiles;
+        };
+        hint?: string;
+      }
+    | null;
+  const widgetState = useOpenAiGlobal("widgetState") as
+    | {
+        scene?: {
+          elements?: readonly ExcalidrawElement[];
+          appState?: any;
+          files?: BinaryFiles;
+        };
+        hint?: string;
+      }
+    | null;
 
-type ToolRuntimeClient = Awaited<ReturnType<typeof createToolRuntimeClient>>;
-
-function useToolRuntime(): ToolRuntimeClient | null {
-  const [client, setClient] = useState<ToolRuntimeClient | null>(null);
+  const [status, setStatus] = useState<string>("Ready");
+  const statusRef = useRef(status);
+  const appliedSceneSignature = useRef<string | null>(null);
+  const pendingSceneRef = useRef<
+    ReturnType<typeof serializeAsJSON> | null
+  >(null);
+  const updateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    createToolRuntimeClient().then((runtime) => {
-      if (!cancelled) {
-        setClient(runtime);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
+    statusRef.current = status;
+  }, [status]);
+
+  useEffect(() => {
+    if (!getOpenAi()) {
+      setStatus("Standalone preview");
+    }
   }, []);
 
-  return client;
-}
-
-export default function DiagramTool() {
-  const runtime = useToolRuntime();
-  const apiRef = useRef<ExcalidrawImperativeAPI | null>(null);
-  const [status, setStatus] = useState<string>("Ready");
-
-  useEffect(() => {
-    if (!runtime) {
-      return;
-    }
-
-    const unsubscribeModel = runtime.onModelMessage((message) => {
-      if (!message) {
+  const applyScene = useCallback(
+    (scene: {
+      elements?: readonly ExcalidrawElement[];
+      appState?: any;
+      files?: BinaryFiles;
+    }) => {
+      const api = apiRef.current;
+      if (!api) {
         return;
       }
 
-      const payload = message as DiagramMessage;
-      if (payload.type === "apply-scene") {
-        const api = apiRef.current;
-        if (api) {
-          const current = api.getSceneElementsIncludingDeleted();
-          const merged = merge({}, { elements: current }, payload.scene);
-          api.updateScene(merged);
+      try {
+        const signature = JSON.stringify(scene);
+        if (appliedSceneSignature.current === signature) {
+          return;
         }
+        appliedSceneSignature.current = signature;
+      } catch {
+        // fall through if scene is not serializable
       }
 
-      if (payload.type === "set-active-tool") {
-        apiRef.current?.setActiveTool({ type: payload.tool as any });
-      }
+      const current = api.getSceneElementsIncludingDeleted();
+      const merged = merge({}, { elements: current }, scene);
+      api.updateScene(merged);
+    },
+    [],
+  );
 
-      if (payload.type === "hint") {
-        setStatus(payload.hint);
-        runtime.emitEvent("hint", payload.hint);
-      }
-    });
+  useEffect(() => {
+    const scene =
+      widgetState?.scene ??
+      toolOutput?.scene;
+    if (scene) {
+      applyScene(scene);
+    }
 
-    const unsubscribeTool = runtime.onToolMessage((message) => {
-      if (message?.type === "hint") {
-        setStatus(message.hint);
-      }
-    });
+    const hint = widgetState?.hint ?? toolOutput?.hint;
+    if (hint) {
+      setStatus(hint);
+    }
+  }, [applyScene, toolOutput, widgetState]);
 
+  const pushSceneUpdate = useCallback(async () => {
+    const payload = pendingSceneRef.current;
+    pendingSceneRef.current = null;
+    updateTimerRef.current = null;
+
+    if (!payload) {
+      return;
+    }
+
+    const openai = getOpenAi();
+    if (!openai) {
+      return;
+    }
+
+    try {
+      await openai.setWidgetState?.({
+        scene: payload,
+        hint: statusRef.current,
+        updatedAt: Date.now(),
+      });
+    } catch (error) {
+      console.warn("[excalidraw] Failed to persist widget state", error);
+    }
+
+    try {
+      await openai.callTool?.("excalidraw_diagrammer", {
+        action: "update",
+        scene: payload,
+        hint: statusRef.current,
+      });
+    } catch (error) {
+      console.warn("[excalidraw] Failed to emit diagram:update", error);
+    }
+  }, []);
+
+  const scheduleSceneUpdate = useCallback(
+    (scene: ReturnType<typeof serializeAsJSON>) => {
+      pendingSceneRef.current = scene;
+      if (updateTimerRef.current) {
+        return;
+      }
+      updateTimerRef.current = setTimeout(pushSceneUpdate, 600);
+    },
+    [pushSceneUpdate],
+  );
+
+  useEffect(() => {
     return () => {
-      unsubscribeModel?.();
-      unsubscribeTool?.();
+      if (updateTimerRef.current) {
+        clearTimeout(updateTimerRef.current);
+        updateTimerRef.current = null;
+      }
     };
-  }, [runtime]);
+  }, []);
 
   const handleChange = useMemo(
     () =>
       (elements: readonly ExcalidrawElement[], appState: any, files: BinaryFiles) => {
-        if (!runtime) {
-          return;
-        }
         const payload = serializeAsJSON(elements, appState, files, "local");
-        runtime.emitEvent("diagram:update", { scene: payload });
+        scheduleSceneUpdate(payload);
       },
-    [runtime],
+    [scheduleSceneUpdate],
   );
 
   const setExcalidrawAPI = (api: ExcalidrawImperativeAPI | null) => {
