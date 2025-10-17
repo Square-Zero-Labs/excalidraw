@@ -276,6 +276,30 @@ function normalizeElement(raw: Record<string, unknown>): ExcalidrawElement {
     normalized.height = typeof raw.height === "number" ? raw.height : 0;
   }
 
+  if (type === "text") {
+    const fontSize =
+      typeof raw.fontSize === "number" && Number.isFinite(raw.fontSize)
+        ? raw.fontSize
+        : 28;
+    const lineHeight =
+      typeof raw.lineHeight === "number" && Number.isFinite(raw.lineHeight)
+        ? raw.lineHeight
+        : 1.25;
+    normalized.text = typeof raw.text === "string" ? raw.text : "";
+    normalized.fontSize = fontSize;
+    normalized.fontFamily =
+      typeof raw.fontFamily === "number" ? raw.fontFamily : 1;
+    normalized.textAlign =
+      typeof raw.textAlign === "string" ? raw.textAlign : "center";
+    normalized.verticalAlign =
+      typeof raw.verticalAlign === "string" ? raw.verticalAlign : "middle";
+    normalized.lineHeight = lineHeight;
+    normalized.baseline =
+      typeof raw.baseline === "number" && Number.isFinite(raw.baseline)
+        ? raw.baseline
+        : Math.round(fontSize * lineHeight);
+  }
+
   return normalized as ExcalidrawElement;
 }
 
@@ -407,6 +431,7 @@ function createDiagramServer(): Server {
         " - updateHint: { type: \"updateHint\", hint: string }",
         "",
         "Element objects follow Excalidraw's serializeAsJSON format (id, type, x, y, width/height or points, strokeColor, strokeWidth, etc.). When unsure, reuse the shape emitted by diagram:update or the examples below.",
+        "To label a node, add a separate text element (`type: \"text\"`) positioned over the associated shape and set `text`, `fontSize`, `textAlign`, and `verticalAlign`.",
         "",
         "Examples:",
         "1. Stick figure with arms and legs:",
