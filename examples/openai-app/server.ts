@@ -189,6 +189,9 @@ const diagramInputSchema = z
             type: z.literal("updateHint"),
             hint: z.string(),
           }),
+          z.object({
+            type: z.literal("resetScene"),
+          }),
         ]),
       )
       .optional(),
@@ -429,6 +432,7 @@ function createDiagramServer(): Server {
         " - upsertElements: { type: \"upsertElements\", elements: [<element>, ...] }",
         " - removeElement: { type: \"removeElement\", selector: { id?: string, text?: string }, removeAll?: boolean }",
         " - updateHint: { type: \"updateHint\", hint: string }",
+        " - resetScene: { type: \"resetScene\" }",
         "",
         "Element objects follow Excalidraw's serializeAsJSON format (id, type, x, y, width/height or points, strokeColor, strokeWidth, etc.). When unsure, reuse the shape emitted by diagram:update or the examples below.",
         "To label a node, add a separate text element (`type: \"text\"`) positioned over the associated shape and set `text`, `fontSize`, `textAlign`, and `verticalAlign`.",
@@ -473,6 +477,9 @@ function createDiagramServer(): Server {
         "",
         "3. Remove an element by label:",
         "{ \"commands\": [ { \"type\": \"removeElement\", \"selector\": { \"text\": \"Step 2\" } } ] }",
+        "",
+        "4. Reset canvas:",
+        "{ \"commands\": [ { \"type\": \"resetScene\" } ] }",
       ].join("\n"),
     inputSchema: {
       type: "object",
@@ -648,6 +655,19 @@ function createDiagramServer(): Server {
           if (command.type === "updateHint") {
             diagramState.hint = command.hint;
             appliedCommands.push("Updated header hint.");
+            continue;
+          }
+
+          if (command.type === "resetScene") {
+            elements = [];
+            diagramState.scene = {
+              ...ensureScene(),
+              elements: [],
+              appState: {},
+              files: {},
+            };
+            diagramState.hint = null;
+            appliedCommands.push("Cleared the canvas.");
             continue;
           }
         }
