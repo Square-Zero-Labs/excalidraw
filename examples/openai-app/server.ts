@@ -1,7 +1,8 @@
 import { createServer, IncomingMessage, ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { URL as NodeURL, fileURLToPath } from "node:url";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
@@ -16,9 +17,29 @@ import {
   Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 
+type ExcalidrawElement = Record<string, unknown> & {
+  id: string;
+  type: string;
+};
+
+type SceneData = {
+  type?: string;
+  version?: number;
+  source?: string;
+  elements?: ExcalidrawElement[];
+  appState?: Record<string, unknown>;
+  files?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
 type DiagramState = {
-  scene: unknown | null;
+  scene: SceneData | null;
   hint: string | null;
+};
+
+type ElementDescriptor = {
+  id?: string | null;
+  text?: string | null;
 };
 
 type UiBundle = {
@@ -31,10 +52,10 @@ type UiBundle = {
 const UI_TEMPLATE_BASE = "ui://excalidraw/diagram.html";
 const SERVER_NAME = "excalidraw-diagrammer";
 const SERVER_VERSION = "0.1.0";
+const moduleDirname = path.dirname(fileURLToPath(import.meta.url));
 
 function resolveDistPath(relative: string) {
-  const url = new URL(relative, import.meta.url);
-  return fileURLToPath(url);
+  return path.resolve(moduleDirname, relative);
 }
 
 function loadUiBundle(): UiBundle {
@@ -44,9 +65,10 @@ function loadUiBundle(): UiBundle {
   try {
     indexHtml = readFileSync(indexPath, "utf8");
   } catch (error) {
+    const reason =
+      error instanceof Error ? ` (${error.message})` : "";
     throw new Error(
-      "Missing built UI assets. Run `yarn build` in examples/openai-app before starting the MCP server.",
-      { cause: error as Error },
+      `Missing built UI assets. Run \`yarn build\` in examples/openai-app before starting the MCP server.${reason}`,
     );
   }
 
@@ -137,8 +159,39 @@ const bundle = loadUiBundle();
 const diagramInputSchema = z
   .object({
     action: z.enum(["apply", "update"]).optional(),
-    scene: z.unknown().optional(),
+    scene: z.object({}).passthrough().optional(),
     hint: z.string().optional(),
+    commands: z
+      .array(
+        z.discriminatedUnion("type", [
+          z.object({
+            type: z.literal("upsertElement"),
+            element: z.object({}).passthrough(),
+          }),
+          z.object({
+            type: z.literal("upsertElements"),
+            elements: z.array(z.object({}).passthrough()).nonempty(),
+          }),
+          z.object({
+            type: z.literal("removeElement"),
+            selector: z
+              .object({
+                id: z.string().optional(),
+                text: z.string().optional(),
+              })
+              .refine((value) => value.id || value.text, {
+                message:
+                  "Provide an id or text descriptor for the element to remove.",
+              }),
+            removeAll: z.boolean().optional(),
+          }),
+          z.object({
+            type: z.literal("updateHint"),
+            hint: z.string(),
+          }),
+        ]),
+      )
+      .optional(),
   })
   .passthrough();
 
@@ -148,13 +201,151 @@ let diagramState: DiagramState = {
 };
 
 function buildStructuredContent() {
+  const scene = ensureScene();
   return {
     type: "excalidraw.diagram",
     templateUri: bundle.templateUri,
     revision: bundle.revision,
-    scene: diagramState.scene,
+    scene,
     hint: diagramState.hint,
   };
+}
+
+function ensureScene(): SceneData {
+  if (!diagramState.scene || typeof diagramState.scene !== "object") {
+    diagramState.scene = {
+      type: "excalidraw",
+      version: 2,
+      source: "server",
+      elements: [],
+      appState: {},
+      files: {},
+    };
+  }
+  diagramState.scene.elements = diagramState.scene.elements ?? [];
+  diagramState.scene.appState = diagramState.scene.appState ?? {};
+  diagramState.scene.files = diagramState.scene.files ?? {};
+  return diagramState.scene;
+}
+
+function randomInt32(): number {
+  return Math.floor(Math.random() * 0x7fffffff);
+}
+
+function normalizeElement(raw: Record<string, unknown>): ExcalidrawElement {
+  const now = Date.now();
+  const id =
+    typeof raw.id === "string" && raw.id.trim().length > 0 ? raw.id : randomUUID();
+  const type =
+    typeof raw.type === "string" && raw.type.trim().length > 0 ? raw.type : "rectangle";
+
+  const normalized: Record<string, unknown> = {
+    ...raw,
+    id,
+    type,
+    x: typeof raw.x === "number" ? raw.x : 0,
+    y: typeof raw.y === "number" ? raw.y : 0,
+    angle: typeof raw.angle === "number" ? raw.angle : 0,
+    strokeColor:
+      typeof raw.strokeColor === "string" ? raw.strokeColor : "#1e1e1e",
+    backgroundColor:
+      typeof raw.backgroundColor === "string" ? raw.backgroundColor : "transparent",
+    fillStyle: typeof raw.fillStyle === "string" ? raw.fillStyle : "hachure",
+    strokeWidth: typeof raw.strokeWidth === "number" ? raw.strokeWidth : 1,
+    strokeStyle:
+      typeof raw.strokeStyle === "string" ? raw.strokeStyle : "solid",
+    roughness: typeof raw.roughness === "number" ? raw.roughness : 1,
+    opacity: typeof raw.opacity === "number" ? raw.opacity : 100,
+    groupIds: Array.isArray(raw.groupIds) ? raw.groupIds : [],
+    frameId: raw.frameId ?? null,
+    seed: typeof raw.seed === "number" ? raw.seed : randomInt32(),
+    version: typeof raw.version === "number" ? raw.version : 1,
+    versionNonce:
+      typeof raw.versionNonce === "number" ? raw.versionNonce : randomInt32(),
+    isDeleted: typeof raw.isDeleted === "boolean" ? raw.isDeleted : false,
+    boundElements: raw.boundElements ?? null,
+    updated: typeof raw.updated === "number" ? raw.updated : now,
+    link: raw.link ?? null,
+    locked: typeof raw.locked === "boolean" ? raw.locked : false,
+  };
+
+  if (!("width" in normalized)) {
+    normalized.width = typeof raw.width === "number" ? raw.width : 0;
+  }
+  if (!("height" in normalized)) {
+    normalized.height = typeof raw.height === "number" ? raw.height : 0;
+  }
+
+  return normalized as ExcalidrawElement;
+}
+
+function normalizeElements(rawElements: ReadonlyArray<Record<string, unknown>>): {
+  elements: ExcalidrawElement[];
+  ids: string[];
+} {
+  const elements = rawElements.map((raw) => normalizeElement(raw));
+  const ids = elements.map((element) => element.id);
+  return { elements, ids };
+}
+
+function removeByDescriptor(
+  elements: ExcalidrawElement[],
+  descriptor: ElementDescriptor,
+  options?: { removeAll?: boolean },
+): { next: ExcalidrawElement[]; removedIds: string[] } {
+  const removeAll = options?.removeAll ?? false;
+  const targetText =
+    typeof descriptor.text === "string" ? descriptor.text.trim().toLowerCase() : null;
+
+  let removedOne = false;
+  const removedIds: string[] = [];
+
+  const next = elements.filter((element) => {
+    const matchesId = descriptor.id && element.id === descriptor.id;
+    const matchesText =
+      targetText &&
+      typeof element.text === "string" &&
+      element.text.trim().toLowerCase().includes(targetText);
+
+    const matches = Boolean(matchesId || matchesText);
+    if (!matches) {
+      return true;
+    }
+
+    if (!removeAll && removedOne) {
+      return true;
+    }
+
+    removedIds.push(element.id);
+    removedOne = true;
+    return false;
+  });
+
+  return { next, removedIds };
+}
+
+function mergeElements(
+  existing: ExcalidrawElement[],
+  incoming: ExcalidrawElement[],
+): ExcalidrawElement[] {
+  const incomingById = new Map(incoming.map((element) => [element.id, element]));
+  const seen = new Set<string>();
+  const merged = existing.map((element) => {
+    const replacement = incomingById.get(element.id);
+    if (replacement) {
+      seen.add(element.id);
+      return replacement;
+    }
+    return element;
+  });
+
+  incoming.forEach((element) => {
+    if (!seen.has(element.id)) {
+      merged.push(element);
+    }
+  });
+
+  return merged;
 }
 
 function createDiagramServer(): Server {
@@ -206,7 +397,7 @@ function createDiagramServer(): Server {
   const toolDefinition: Tool = {
     name: "excalidraw_diagrammer",
     description:
-      "Render and edit Excalidraw diagrams alongside the chat conversation.",
+      "Render and edit an Excalidraw canvas alongside the chat. Provide a full serialized scene or issue targeted commands (upsert/remove elements, update hints) to tweak the diagram incrementally.",
     inputSchema: {
       type: "object",
       properties: {
@@ -225,6 +416,88 @@ function createDiagramServer(): Server {
           type: "string",
           description:
             "Optional helper text to display in the Excalidraw header.",
+        },
+        commands: {
+          type: "array",
+          description:
+            "Optional list of high-level commands to mutate the scene. Commands run after the scene payload (if provided).",
+          items: {
+            oneOf: [
+              {
+                type: "object",
+                required: ["type", "element"],
+                additionalProperties: false,
+                properties: {
+                  type: {
+                    const: "upsertElement",
+                  },
+                  element: {
+                    type: "object",
+                    description:
+                      "Full Excalidraw element payload (same structure as items in serializeAsJSON(...).elements). When the id matches an existing element it will be replaced, otherwise it is inserted.",
+                    additionalProperties: true,
+                  },
+                },
+              },
+              {
+                type: "object",
+                required: ["type", "elements"],
+                additionalProperties: false,
+                properties: {
+                  type: { const: "upsertElements" },
+                  elements: {
+                    type: "array",
+                    minItems: 1,
+                    items: {
+                      type: "object",
+                      additionalProperties: true,
+                    },
+                    description:
+                      "Batch upsert. Elements follow the same definition as Excalidraw scene elements.",
+                  },
+                },
+              },
+              {
+                type: "object",
+                required: ["type", "selector"],
+                additionalProperties: false,
+                properties: {
+                  type: { const: "removeElement" },
+                  selector: {
+                    type: "object",
+                    description:
+                      "Descriptor for the element(s) to remove. Provide an element id or a text fragment that matches the element's label.",
+                    properties: {
+                      id: { type: "string" },
+                      text: { type: "string" },
+                    },
+                    additionalProperties: false,
+                    anyOf: [
+                      { required: ["id"] },
+                      { required: ["text"] },
+                    ],
+                  },
+                  removeAll: {
+                    type: "boolean",
+                    description:
+                      "Remove every matching element instead of only the first match.",
+                  },
+                },
+              },
+              {
+                type: "object",
+                required: ["type", "hint"],
+                additionalProperties: false,
+                properties: {
+                  type: { const: "updateHint" },
+                  hint: {
+                    type: "string",
+                    description: "Replacement status message for the canvas header.",
+                  },
+                },
+              },
+            ],
+          },
         },
       },
       required: [],
@@ -249,13 +522,64 @@ function createDiagramServer(): Server {
 
       const args = diagramInputSchema.parse(request.params.arguments ?? {});
       const action = args.action ?? "apply";
+      const appliedCommands: string[] = [];
 
       if (typeof args.scene !== "undefined") {
         diagramState = {
           ...diagramState,
-          scene: args.scene,
+          scene: args.scene as SceneData,
         };
       }
+
+      const scene = ensureScene();
+      let elements = scene.elements ?? [];
+
+      if (Array.isArray(args.commands) && args.commands.length > 0) {
+        for (const command of args.commands) {
+          if (command.type === "upsertElement") {
+            const { elements: normalized, ids } = normalizeElements([command.element]);
+            elements = mergeElements(elements, normalized);
+            appliedCommands.push(`Upserted element ${ids[0]}.`);
+            continue;
+          }
+
+          if (command.type === "upsertElements") {
+            const { elements: normalized, ids } = normalizeElements(command.elements);
+            elements = mergeElements(elements, normalized);
+            appliedCommands.push(`Upserted ${ids.length} element(s): ${ids.join(", ")}.`);
+            continue;
+          }
+
+          if (command.type === "removeElement") {
+            const { next, removedIds } = removeByDescriptor(
+              elements,
+              command.selector,
+              { removeAll: command.removeAll },
+            );
+            elements = next;
+            if (removedIds.length > 0) {
+              appliedCommands.push(
+                `Removed ${removedIds.length} element(s): ${removedIds.join(", ")}.`,
+              );
+            } else {
+              appliedCommands.push(
+                `No elements matched selector (id=${command.selector.id ?? "∅"}, text=${command.selector.text ?? "∅"}).`,
+              );
+            }
+            continue;
+          }
+
+          if (command.type === "updateHint") {
+            diagramState.hint = command.hint;
+            appliedCommands.push("Updated header hint.");
+            continue;
+          }
+        }
+
+      }
+
+      scene.elements = elements;
+      diagramState.scene = scene;
 
       if (typeof args.hint === "string") {
         diagramState = {
@@ -269,11 +593,16 @@ function createDiagramServer(): Server {
           ? "Captured the latest diagram changes."
           : "Applied the scene update to Excalidraw.";
 
+      const details =
+        appliedCommands.length > 0
+          ? `\n\nCommands:\n- ${appliedCommands.join("\n- ")}`
+          : "";
+
       return {
         content: [
           {
             type: "text",
-            text,
+            text: `${text}${details}`,
           },
         ],
         structuredContent: buildStructuredContent(),
@@ -364,7 +693,8 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
-  const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
+  const requestUrl = req.url ?? "/";
+  const url = new NodeURL(requestUrl, `http://${req.headers.host ?? "localhost"}`);
 
   if (
     req.method === "OPTIONS" &&

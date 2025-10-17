@@ -1,10 +1,9 @@
-import {
-  Excalidraw,
+import { Excalidraw, serializeAsJSON } from "@excalidraw/excalidraw";
+import type {
+  BinaryFiles,
   ExcalidrawImperativeAPI,
-  serializeAsJSON,
-} from "@excalidraw/excalidraw";
-import type { BinaryFiles, ExcalidrawElement } from "@excalidraw/excalidraw/types";
-import merge from "lodash.merge";
+} from "@excalidraw/excalidraw/types";
+import type { ExcalidrawElement } from "@excalidraw/element/types";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import "./tool-ui.css";
@@ -74,9 +73,7 @@ export default function DiagramTool() {
         // fall through if scene is not serializable
       }
 
-      const current = api.getSceneElementsIncludingDeleted();
-      const merged = merge({}, { elements: current }, scene);
-      api.updateScene(merged);
+      api.updateScene(scene);
     },
     [],
   );

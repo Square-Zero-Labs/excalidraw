@@ -55,7 +55,7 @@ This example shows how to embed Excalidraw inside a [ChatGPT app](https://develo
 
 ## How it works
 
-- `server.ts` is a minimal MCP server backed by `@modelcontextprotocol/sdk`. It exposes a single tool (`excalidraw_diagrammer`) plus an HTML resource (`ui://excalidraw/diagram.html`) that ChatGPT renders when the tool replies with structured content. The server stores the latest scene so subsequent tool invocations see the most recent canvas.
+- `server.ts` is a minimal MCP server backed by `@modelcontextprotocol/sdk`. It exposes a single tool (`excalidraw_diagrammer`) plus an HTML resource (`ui://excalidraw/diagram.html`) that ChatGPT renders when the tool replies with structured content. The server stores the latest scene so subsequent tool invocations see the most recent canvas and can also process generic commands for adding, updating, and removing elements.
 - `src/openai-bridge.ts` reproduces the `useOpenAiGlobal()` helper from the OpenAI Apps examples so the React bundle can access `window.openai` updates.
 - `src/tool-ui.tsx` is the React entry point rendered in the ChatGPT tool panel. It mounts `<Excalidraw>`, listens for `window.openai.toolOutput` updates, and merges any returned `scene` into the live canvas. User edits are throttled, serialized with `serializeAsJSON()`, cached via `window.openai.setWidgetState()`, and mirrored back to the MCP server with `callTool("excalidraw_diagrammer", { action: "update", ... })`.
 - `src/main.tsx` boots the UI bundle in standalone dev mode (outside ChatGPT) so you can verify the canvas renders correctly.
@@ -68,28 +68,86 @@ Ask the model to always reply with structured JSON when invoking the tool, e.g.
 {
   "tool": "excalidraw_diagrammer",
   "parameters": {
-    "scene": {
-      "elements": [
-        {
-          "id": "generated-node-1",
-          "type": "rectangle",
-          "x": 200,
-          "y": 160,
-          "width": 240,
-          "height": 120,
-          "angle": 0,
-          "strokeColor": "#1e1e1e",
-          "backgroundColor": "#f9f9f9",
-          "seed": 12345
-        }
-      ]
-    },
-    "hint": "Added the initial rectangle"
+    "commands": [
+      {
+        "type": "upsertElements",
+        "elements": [
+          {
+            "id": "rest-api-server",
+            "type": "rectangle",
+            "x": 160,
+            "y": 120,
+            "width": 260,
+            "height": 140,
+            "angle": 0,
+            "strokeColor": "#1e1e1e",
+            "backgroundColor": "#f8fafc",
+            "fillStyle": "hachure",
+            "strokeWidth": 2,
+            "strokeStyle": "solid",
+            "roughness": 1,
+            "opacity": 100,
+            "groupIds": [],
+            "frameId": null,
+            "seed": 123456789,
+            "version": 1,
+            "versionNonce": 987654321,
+            "isDeleted": false,
+            "boundElements": null,
+            "updated": 1700000000000,
+            "link": null,
+            "locked": false
+          },
+          {
+            "id": "rest-api-label",
+            "type": "text",
+            "x": 210,
+            "y": 170,
+            "width": 160,
+            "height": 40,
+            "angle": 0,
+            "strokeColor": "#1e1e1e",
+            "backgroundColor": "transparent",
+            "fillStyle": "hachure",
+            "strokeWidth": 1,
+            "strokeStyle": "solid",
+            "roughness": 1,
+            "opacity": 100,
+            "groupIds": [],
+            "frameId": null,
+            "seed": 111222333,
+            "version": 1,
+            "versionNonce": 222333444,
+            "isDeleted": false,
+            "boundElements": null,
+            "updated": 1700000000000,
+            "link": null,
+            "locked": false,
+            "text": "REST API",
+            "fontSize": 28,
+            "fontFamily": 1,
+            "textAlign": "center",
+            "verticalAlign": "middle",
+            "baseline": 32,
+            "lineHeight": 1.25
+          }
+        ]
+      }
+    ],
+    "hint": "Sketched the REST API node."
   }
 }
 ```
 
 The UI will merge the returned elements into the current scene and surface the `hint` message next to the title bar.
+
+### Available commands
+
+- `upsertElement` / `upsertElements` — Insert new elements or replace existing ones by id. Each element uses the same schema that `serializeAsJSON(...).elements` returns. A quick workflow is to draw once, inspect the emitted `diagram:update` event, and reuse that structure when composing future prompts.
+- `removeElement` — Delete by element id or by matching a text label. Use `removeAll: true` to clear every match.
+- `updateHint` &mdash; Override the status text shown above the canvas.
+
+You can still send a full serialized `scene` payload if you want to take complete control of the canvas. When both `scene` and `commands` are present, the commands run after the scene is stored, so you can patch the new state in a single call.
 
 ## Next steps
 
