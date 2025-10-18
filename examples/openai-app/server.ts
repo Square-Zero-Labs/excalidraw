@@ -301,6 +301,38 @@ function normalizeElement(raw: Record<string, unknown>): ExcalidrawElement {
       typeof raw.baseline === "number" && Number.isFinite(raw.baseline)
         ? raw.baseline
         : Math.round(fontSize * lineHeight);
+    const textContent =
+      typeof raw.text === "string" ? raw.text : "";
+    const lines = textContent.split("\n");
+    const approxWidth =
+      lines.reduce((max, line) => {
+        const length = line.trim().length;
+        const candidate = length === 0 ? fontSize : length * (fontSize * 0.6);
+        return Math.max(max, candidate);
+      }, 0) || fontSize * 2;
+    const desiredWidth = Math.max(fontSize * 2, approxWidth + fontSize);
+    const desiredHeight = Math.max(
+      fontSize * lineHeight,
+      lines.length * fontSize * lineHeight,
+    );
+    if (
+      typeof normalized.width !== "number" ||
+      !Number.isFinite(normalized.width) ||
+      normalized.width <= 0
+    ) {
+      normalized.width = desiredWidth;
+    } else {
+      normalized.width = Math.max(normalized.width, desiredWidth);
+    }
+    if (
+      typeof normalized.height !== "number" ||
+      !Number.isFinite(normalized.height) ||
+      normalized.height <= 0
+    ) {
+      normalized.height = desiredHeight;
+    } else {
+      normalized.height = Math.max(normalized.height, desiredHeight);
+    }
   }
 
   return normalized as ExcalidrawElement;
