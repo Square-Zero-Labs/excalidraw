@@ -9,20 +9,8 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "baseUrl": ".",
-    "types": ["vite/client", "node"],
-    "paths": {
-      "@excalidraw/excalidraw": ["../../packages/excalidraw/dist/types/excalidraw/index"],
-      "@excalidraw/excalidraw/*": ["../../packages/excalidraw/dist/types/excalidraw/*"],
-      "@excalidraw/common": ["../../packages/common/dist/types/common/src/index"],
-      "@excalidraw/common/*": ["../../packages/common/dist/types/common/src/*"],
-      "@excalidraw/element": ["../../packages/element/dist/types/element/src/index"],
-      "@excalidraw/element/*": ["../../packages/element/dist/types/element/src/*"],
-      "@excalidraw/math": ["../../packages/math/dist/types/math/src/index"],
-      "@excalidraw/math/*": ["../../packages/math/dist/types/math/src/*"],
-      "@excalidraw/utils": ["../../packages/utils/dist/types/utils/src/index"],
-      "@excalidraw/utils/*": ["../../packages/utils/dist/types/utils/src/*"]
-    }
+    "types": ["vite/client", "node"]
   },
-  "include": ["src"],
+  "include": ["src", "server.ts"],
   "exclude": ["dist", "node_modules"]
 }

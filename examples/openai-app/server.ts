@@ -421,7 +421,7 @@ function createDiagramServer(): Server {
     }),
   );
 
-  const toolDefinition: Tool = {
+  const excalidraw_diagrammer: Tool = {
     name: "excalidraw_diagrammer",
     description:
       [
@@ -432,7 +432,7 @@ function createDiagramServer(): Server {
         " - upsertElements: { type: \"upsertElements\", elements: [<element>, ...] }",
         " - removeElement: { type: \"removeElement\", selector: { id?: string, text?: string }, removeAll?: boolean }",
         " - updateHint: { type: \"updateHint\", hint: string }",
-        " - resetScene: { type: \"resetScene\" }",
+        " - resetScene: { type: \"resetScene\" } (optional helper; prefer the dedicated excalidraw_reset tool for a full wipe)",
         "",
         "Element objects follow Excalidraw's serializeAsJSON format (id, type, x, y, width/height or points, strokeColor, strokeWidth, etc.). When unsure, reuse the shape emitted by diagram:update or the examples below.",
         "To label a node, add a separate text element (`type: \"text\"`) positioned over the associated shape and set `text`, `fontSize`, `textAlign`, and `verticalAlign`.",
@@ -589,123 +589,155 @@ function createDiagramServer(): Server {
     _meta: bundle.meta,
   };
 
+  const resetTool: Tool = {
+    name: "excalidraw_reset",
+    description:
+      "Clear the Excalidraw canvas and reset all hints. Use this tool when the user asks to start fresh.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  };
+
   mcpServer.setRequestHandler(
     ListToolsRequestSchema,
     async () => ({
-      tools: [toolDefinition],
+      tools: [excalidraw_diagrammer, resetTool],
     }),
   );
 
-  mcpServer.setRequestHandler(
-    CallToolRequestSchema,
-    async (request: CallToolRequest) => {
-      if (request.params.name !== toolDefinition.name) {
-        throw new Error(`Unknown tool: ${request.params.name}`);
-      }
-
-      const args = diagramInputSchema.parse(request.params.arguments ?? {});
-      const action = args.action ?? "apply";
-      const appliedCommands: string[] = [];
-
-      if (typeof args.scene !== "undefined") {
-        diagramState = {
-          ...diagramState,
-          scene: args.scene as SceneData,
-        };
-      }
-
-      const scene = ensureScene();
-      let elements = scene.elements ?? [];
-
-      if (Array.isArray(args.commands) && args.commands.length > 0) {
-        for (const command of args.commands) {
-          if (command.type === "upsertElement") {
-            const { elements: normalized, ids } = normalizeElements([command.element]);
-            elements = mergeElements(elements, normalized);
-            appliedCommands.push(`Upserted element ${ids[0]}.`);
-            continue;
-          }
-
-          if (command.type === "upsertElements") {
-            const { elements: normalized, ids } = normalizeElements(command.elements);
-            elements = mergeElements(elements, normalized);
-            appliedCommands.push(`Upserted ${ids.length} element(s): ${ids.join(", ")}.`);
-            continue;
-          }
-
-          if (command.type === "removeElement") {
-            const { next, removedIds } = removeByDescriptor(
-              elements,
-              command.selector,
-              { removeAll: command.removeAll },
-            );
-            elements = next;
-            if (removedIds.length > 0) {
-              appliedCommands.push(
-                `Removed ${removedIds.length} element(s): ${removedIds.join(", ")}.`,
-              );
-            } else {
-              appliedCommands.push(
-                `No elements matched selector (id=${command.selector.id ?? "∅"}, text=${command.selector.text ?? "∅"}).`,
-              );
-            }
-            continue;
-          }
-
-          if (command.type === "updateHint") {
-            diagramState.hint = command.hint;
-            appliedCommands.push("Updated header hint.");
-            continue;
-          }
-
-          if (command.type === "resetScene") {
-            elements = [];
-            diagramState.scene = {
-              ...ensureScene(),
-              elements: [],
-              appState: {},
-              files: {},
-            };
-            diagramState.hint = null;
-            appliedCommands.push("Cleared the canvas.");
-            continue;
-          }
-        }
-
-      }
-
-      scene.elements = elements;
-      diagramState.scene = scene;
-
-      if (typeof args.hint === "string") {
-        diagramState = {
-          ...diagramState,
-          hint: args.hint,
-        };
-      }
-
-      const text =
-        action === "update"
-          ? "Captured the latest diagram changes."
-          : "Applied the scene update to Excalidraw.";
-
-      const details =
-        appliedCommands.length > 0
-          ? `\n\nCommands:\n- ${appliedCommands.join("\n- ")}`
-          : "";
-
+  mcpServer.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest) => {
+    if (request.params.name === resetTool.name) {
+      diagramState = { scene: null, hint: null };
       return {
-        content: [
-          {
-            type: "text",
-            text: `${text}${details}`,
-          },
-        ],
+        content: [{ type: "text", text: "Cleared the Excalidraw canvas." }],
         structuredContent: buildStructuredContent(),
         _meta: bundle.meta,
       };
-    },
-  );
+    }
+
+    if (request.params.name !== excalidraw_diagrammer.name) {
+      throw new Error(`Unknown tool: ${request.params.name}`);
+    }
+
+    const args = diagramInputSchema.parse(request.params.arguments ?? {});
+    const action = args.action ?? "apply";
+    const appliedCommands: string[] = [];
+    const commandList = Array.isArray(args.commands) ? args.commands : [];
+    const hasResetCommand = commandList.some((command) => command?.type === "resetScene");
+
+    let ignoredEmptyScenePayload = false;
+    if (typeof args.scene !== "undefined") {
+      const incomingScene = args.scene as SceneData;
+      const incomingElements = Array.isArray(incomingScene.elements)
+        ? incomingScene.elements
+        : null;
+
+      if (!hasResetCommand && incomingElements && incomingElements.length === 0) {
+        ignoredEmptyScenePayload = true;
+      } else {
+        diagramState = {
+          ...diagramState,
+          scene: incomingScene,
+        };
+      }
+    }
+
+    let scene = ensureScene();
+    let elements = scene.elements ?? [];
+
+    if (ignoredEmptyScenePayload) {
+      appliedCommands.push(
+        "Ignored empty scene payload. Use {\"type\":\"resetScene\"} to clear the canvas.",
+      );
+    }
+
+    for (const command of commandList) {
+      if (!command) continue;
+
+      if (command.type === "upsertElement") {
+        const { elements: normalized, ids } = normalizeElements([command.element]);
+        elements = mergeElements(elements, normalized);
+        appliedCommands.push(`Upserted element ${ids[0]}.`);
+        continue;
+      }
+
+      if (command.type === "upsertElements") {
+        const { elements: normalized, ids } = normalizeElements(command.elements);
+        elements = mergeElements(elements, normalized);
+        appliedCommands.push(`Upserted ${ids.length} element(s): ${ids.join(", ")}.`);
+        continue;
+      }
+
+      if (command.type === "removeElement") {
+        const { next, removedIds } = removeByDescriptor(elements, command.selector, {
+          removeAll: command.removeAll,
+        });
+        elements = next;
+        if (removedIds.length > 0) {
+          appliedCommands.push(`Removed ${removedIds.length} element(s): ${removedIds.join(", ")}.`);
+        } else {
+          appliedCommands.push(
+            `No elements matched selector (id=${command.selector.id ?? "∅"}, text=${command.selector.text ?? "∅"}).`,
+          );
+        }
+        continue;
+      }
+
+      if (command.type === "updateHint") {
+        diagramState.hint = command.hint;
+        appliedCommands.push("Updated header hint.");
+        continue;
+      }
+
+      if (command.type === "resetScene") {
+        elements = [];
+        diagramState.scene = {
+          ...ensureScene(),
+          elements: [],
+          appState: {},
+          files: {},
+        };
+        diagramState.hint = null;
+        appliedCommands.push("Cleared the canvas.");
+        scene = ensureScene();
+        elements = scene.elements ?? [];
+        continue;
+      }
+    }
+
+    scene.elements = elements;
+    diagramState.scene = scene;
+
+    if (typeof args.hint === "string") {
+      diagramState = {
+        ...diagramState,
+        hint: args.hint,
+      };
+    }
+
+    const text =
+      action === "update"
+        ? "Captured the latest diagram changes."
+        : "Applied the scene update to Excalidraw.";
+
+    const details =
+      appliedCommands.length > 0
+        ? `\n\nCommands:\n- ${appliedCommands.join("\n- ")}`
+        : "";
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `${text}${details}`,
+        },
+      ],
+      structuredContent: buildStructuredContent(),
+      _meta: bundle.meta,
+    };
+  });
 
   return mcpServer;
 }

@@ -1,13 +1,17 @@
 import { Excalidraw, serializeAsJSON } from "@excalidraw/excalidraw";
-import type {
-  BinaryFiles,
-  ExcalidrawImperativeAPI,
-} from "@excalidraw/excalidraw/types";
-import type { ExcalidrawElement } from "@excalidraw/element/types";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import "./tool-ui.css";
 import { getOpenAi, useOpenAiGlobal } from "./openai-bridge";
+
+type ExcalidrawImperativeAPI = {
+  updateScene(scene: any): void;
+  getSceneElementsIncludingDeleted(): any[];
+  setActiveTool(tool: { type: string }): void;
+};
+
+type BinaryFiles = Record<string, unknown>;
+type ExcalidrawElement = any;
 
 const DEFAULT_CANVAS_HEIGHT = 720;
 
