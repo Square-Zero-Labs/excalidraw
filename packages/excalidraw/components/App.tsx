@@ -1,3 +1,5 @@
+/// <reference path="../window-hook.d.ts" />
+
 import clsx from "clsx";
 import throttle from "lodash.throttle";
 import React, { useContext } from "react";
@@ -11460,23 +11462,6 @@ class App extends React.Component<AppProps, AppState> {
       defaultLang;
     await setLanguage(currentLang);
     this.setAppState({});
-  }
-}
-
-// -----------------------------------------------------------------------------
-// TEST HOOKS
-// -----------------------------------------------------------------------------
-declare global {
-  interface Window {
-    h: {
-      scene: Scene;
-      elements: readonly ExcalidrawElement[];
-      state: AppState;
-      setState: React.Component<any, AppState>["setState"];
-      app: InstanceType<typeof App>;
-      history: History;
-      store: Store;
-    };
   }
 }
 

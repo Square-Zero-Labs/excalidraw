@@ -1,0 +1,33 @@
+.excalidraw-openai-app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100%;
+  background: var(--app-background, #fafafa);
+}
+
+.excalidraw-openai-app__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid #d0d5dd;
+  background: rgba(255, 255, 255, 0.9);
+  font-family: var(--font-family, "Inter", sans-serif);
+  font-size: 0.85rem;
+  color: #3a3f4a;
+}
+
+.excalidraw-openai-app__title {
+  font-weight: 600;
+}
+
+.excalidraw-openai-app__status {
+  font-size: 0.8rem;
+  color: #667085;
+}
+
+.excalidraw-openai-app__canvas {
+  flex: 1;
+  min-height: 0;
+}
